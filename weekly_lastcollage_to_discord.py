@@ -10,32 +10,73 @@ def generate_collage(username, output_path):
         browser = p.chromium.launch(headless=True)
         page = browser.new_page(viewport={"width": 1600, "height": 1800})
 
-        page.goto(LASTCOLLAGE_URL)
+        page.goto(LASTCOLLAGE_URL, wait_until="domcontentloaded")
 
-        # Fill username
-        page.locator("input").first.fill(username)
+        page.wait_for_timeout(3000)
 
-        # Try clicking "Last 7 Days"
-        try:
-            page.get_by_text("Last 7 Days").click()
-        except:
-            pass
+        # Fill visible username field
+        username_filled = False
+        selectors = [
+            'input[placeholder*="Last.fm"]',
+            'input[placeholder*="username"]',
+            'input[name*="user"]',
+            'input[name*="username"]',
+            'input[type="text"]'
+        ]
 
-        # Try selecting 5x5
-        try:
-            page.get_by_text("5x5").click()
-        except:
-            pass
+        for selector in selectors:
+            try:
+                locator = page.locator(selector).first
+                locator.wait_for(state="visible", timeout=5000)
+                locator.fill(username)
+                username_filled = True
+                break
+            except:
+                pass
 
-        # Click generate
-        page.get_by_text("Generate").click()
+        if not username_filled:
+            raise Exception("Could not find a visible Last.fm username input field.")
 
-        # Wait for result
-        page.wait_for_timeout(5000)
+        # Try clicking Last 7 Days
+        for text in ["Last 7 Days", "7 days", "Weekly"]:
+            try:
+                page.get_by_text(text, exact=False).click(timeout=3000)
+                break
+            except:
+                pass
 
-        # Screenshot full page (simplest reliable fallback)
+        # Try clicking 5x5
+        for text in ["5x5", "5 x 5"]:
+            try:
+                page.get_by_text(text, exact=False).click(timeout=3000)
+                break
+            except:
+                pass
+
+        # Try albums mode
+        for text in ["Albums", "Album"]:
+            try:
+                page.get_by_text(text, exact=False).click(timeout=2000)
+                break
+            except:
+                pass
+
+        # Click Generate
+        generated = False
+        for text in ["Generate", "Create", "Make collage"]:
+            try:
+                page.get_by_text(text, exact=False).click(timeout=5000)
+                generated = True
+                break
+            except:
+                pass
+
+        if not generated:
+            raise Exception("Could not find Generate button.")
+
+        page.wait_for_timeout(7000)
+
         page.screenshot(path=str(output_path), full_page=True)
-
         browser.close()
 
 
@@ -44,11 +85,11 @@ def send_to_discord(webhook_url, image_path, username):
         response = requests.post(
             webhook_url,
             data={"content": f"{username}'s weekly 5x5 collage"},
-            files={"file": f},
+            files={"file": ("collage.png", f, "image/png")},
         )
 
     if response.status_code >= 300:
-        raise Exception(f"Discord error: {response.text}")
+        raise Exception(f"Discord error: {response.status_code} - {response.text}")
 
 
 def main():
