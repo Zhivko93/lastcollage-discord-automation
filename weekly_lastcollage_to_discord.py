@@ -98,46 +98,57 @@ def add_lastcollage_style_overlay(img: Image.Image, album_name: str, artist_name
     overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
 
-    title_font, artist_font = get_fonts()
+    # Font
+    try:
+        font = ImageFont.truetype("DejaVuSans.ttf", 16)
+    except Exception:
+        font = ImageFont.load_default()
 
-    # 🔧 MUCH softer gradient (this is the fix)
-    gradient_height = int(img.height * 0.22)
-    start_y = img.height - gradient_height
+    # Combine text like lastcollage
+    text = f"{artist_name} – {album_name}"
 
-    for i in range(gradient_height):
-        alpha = int(120 * (i / gradient_height))  # reduced from 180 → 120
-        y = start_y + i
-        draw.rectangle([(0, y), (img.width, y + 1)], fill=(0, 0, 0, alpha))
+    # Wrap into max 2 lines
+    lines = textwrap.wrap(text, width=28)[:2]
 
-    # Slight shadow for readability instead of heavy overlay
-    padding_x = 10
-    current_y = img.height - 60
+    padding_x = 8
+    padding_y = 6
 
-    title_lines = wrap_text(album_name, 18)
-    artist_lines = wrap_text(artist_name, 22)
+    # Calculate text size
+    text_width = 0
+    text_height = 0
 
-    # Draw shadow first (subtle)
-    for line in title_lines:
-        draw.text((padding_x+1, current_y+1), line, font=title_font, fill=(0, 0, 0, 120))
-        current_y += 20
+    for line in lines:
+        bbox = draw.textbbox((0, 0), line, font=font)
+        w = bbox[2] - bbox[0]
+        h = bbox[3] - bbox[1]
+        text_width = max(text_width, w)
+        text_height += h
 
-    current_y += 2
+    text_height += (len(lines) - 1) * 2
 
-    for line in artist_lines:
-        draw.text((padding_x+1, current_y+1), line, font=artist_font, fill=(0, 0, 0, 120))
-        current_y += 18
+    # Box position (bottom-left)
+    box_x = 0
+    box_y = img.height - text_height - (padding_y * 2)
 
-    # Reset Y and draw actual text
-    current_y = img.height - 60
+    # Draw semi-transparent rectangle (THIS is the key difference)
+    draw.rectangle(
+        [
+            (box_x, box_y),
+            (box_x + text_width + padding_x * 2, img.height)
+        ],
+        fill=(0, 0, 0, 140)  # softer than your previous gradient
+    )
 
-    for line in title_lines:
-        draw.text((padding_x, current_y), line, font=title_font, fill=(255, 255, 255, 235))
-        current_y += 20
+    # Draw text
+    current_y = box_y + padding_y
 
-    current_y += 2
-
-    for line in artist_lines:
-        draw.text((padding_x, current_y), line, font=artist_font, fill=(220, 220, 220, 220))
+    for line in lines:
+        draw.text(
+            (padding_x, current_y),
+            line,
+            font=font,
+            fill=(255, 255, 255, 230)
+        )
         current_y += 18
 
     return Image.alpha_composite(img, overlay).convert("RGB")
