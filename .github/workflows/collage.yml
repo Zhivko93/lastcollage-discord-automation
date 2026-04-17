@@ -1,0 +1,26 @@
+name: Weekly Lastcollage
+
+on:
+  schedule:
+    - cron: "0 18 * * 5"
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install requests playwright
+
+      - run: python -m playwright install chromium
+
+      - run: python weekly_lastcollage_to_discord.py
+        env:
+          LASTFM_USERNAME: ${{ secrets.LASTFM_USERNAME }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
