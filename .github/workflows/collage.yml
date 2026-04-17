@@ -2,7 +2,7 @@ name: Weekly Lastcollage
 
 on:
   schedule:
-    - cron: "0 18 * * 5"
+    - cron: "0 18 * * 0"
   workflow_dispatch:
 
 jobs:
@@ -23,12 +23,3 @@ jobs:
           LASTFM_USERNAME: ${{ secrets.LASTFM_USERNAME }}
           LASTFM_API_KEY: ${{ secrets.LASTFM_API_KEY }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-
-      - name: Upload debug screenshot on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: debug-lastcollage
-          path: |
-            *.png
-          if-no-files-found: ignore
