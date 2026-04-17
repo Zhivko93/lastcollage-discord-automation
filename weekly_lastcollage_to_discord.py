@@ -67,6 +67,30 @@ def generate_collage(username, output_path):
         username_locator.fill(username)
         page.wait_for_timeout(1000)
 
+        # Move past the username screen
+advanced = False
+
+for text in ["Next", "Continue", "Go"]:
+    try:
+        page.get_by_role("button", name=text).click(timeout=3000)
+        page.wait_for_timeout(3000)
+        advanced = True
+        break
+    except:
+        pass
+
+if not advanced:
+    try:
+        page.keyboard.press("Enter")
+        page.wait_for_timeout(3000)
+        advanced = True
+    except:
+        pass
+
+if not advanced:
+    page.screenshot(path="debug-lastcollage-page.png", full_page=True)
+    raise Exception("Could not move past username screen. Saved debug-lastcollage-page.png")
+
         for text in ["Last 7 Days", "7 days", "Last week", "Weekly"]:
             try:
                 page.get_by_text(text, exact=False).click(timeout=3000)
