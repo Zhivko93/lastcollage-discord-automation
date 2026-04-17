@@ -100,33 +100,44 @@ def add_lastcollage_style_overlay(img: Image.Image, album_name: str, artist_name
 
     title_font, artist_font = get_fonts()
 
-    gradient_height = int(img.height * 0.38)
+    # 🔧 MUCH softer gradient (this is the fix)
+    gradient_height = int(img.height * 0.22)
     start_y = img.height - gradient_height
 
     for i in range(gradient_height):
-        alpha = int(180 * (i / gradient_height))
+        alpha = int(120 * (i / gradient_height))  # reduced from 180 → 120
         y = start_y + i
         draw.rectangle([(0, y), (img.width, y + 1)], fill=(0, 0, 0, alpha))
+
+    # Slight shadow for readability instead of heavy overlay
+    padding_x = 10
+    current_y = img.height - 60
 
     title_lines = wrap_text(album_name, 18)
     artist_lines = wrap_text(artist_name, 22)
 
-    padding_x = 12
-    current_y = img.height - 70
+    # Draw shadow first (subtle)
+    for line in title_lines:
+        draw.text((padding_x+1, current_y+1), line, font=title_font, fill=(0, 0, 0, 120))
+        current_y += 20
 
-    if len(title_lines) == 2:
-        current_y -= 16
-    if len(artist_lines) == 2:
-        current_y -= 10
+    current_y += 2
+
+    for line in artist_lines:
+        draw.text((padding_x+1, current_y+1), line, font=artist_font, fill=(0, 0, 0, 120))
+        current_y += 18
+
+    # Reset Y and draw actual text
+    current_y = img.height - 60
 
     for line in title_lines:
         draw.text((padding_x, current_y), line, font=title_font, fill=(255, 255, 255, 235))
-        current_y += 22
+        current_y += 20
 
-    current_y += 4
+    current_y += 2
 
     for line in artist_lines:
-        draw.text((padding_x, current_y), line, font=artist_font, fill=(220, 220, 220, 225))
+        draw.text((padding_x, current_y), line, font=artist_font, fill=(220, 220, 220, 220))
         current_y += 18
 
     return Image.alpha_composite(img, overlay).convert("RGB")
