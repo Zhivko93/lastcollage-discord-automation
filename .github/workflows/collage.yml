@@ -16,13 +16,12 @@ jobs:
         with:
           python-version: "3.11"
 
-      - run: pip install requests playwright
-
-      - run: python -m playwright install chromium
+      - run: pip install requests pillow
 
       - run: python weekly_lastcollage_to_discord.py
         env:
           LASTFM_USERNAME: ${{ secrets.LASTFM_USERNAME }}
+          LASTFM_API_KEY: ${{ secrets.LASTFM_API_KEY }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
 
       - name: Upload debug screenshot on failure
