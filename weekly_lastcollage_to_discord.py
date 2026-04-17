@@ -1,6 +1,5 @@
 import io
 import os
-import math
 import textwrap
 from pathlib import Path
 
@@ -8,8 +7,8 @@ import requests
 from PIL import Image, ImageDraw, ImageFont
 
 LASTFM_API_URL = "https://ws.audioscrobbler.com/2.0/"
-CELL_SIZE = 300
 GRID_SIZE = 5
+CELL_SIZE = 300
 PADDING = 0
 OUTPUT_WIDTH = GRID_SIZE * CELL_SIZE + (GRID_SIZE - 1) * PADDING
 OUTPUT_HEIGHT = GRID_SIZE * CELL_SIZE + (GRID_SIZE - 1) * PADDING
@@ -50,14 +49,12 @@ def extract_image_url(album: dict) -> str | None:
     if not isinstance(images, list):
         return None
 
-    # Prefer larger images first
     preferred_sizes = ["extralarge", "large", "medium"]
     for size in preferred_sizes:
         for img in images:
             if img.get("size") == size and img.get("#text"):
                 return img["#text"]
 
-    # Fallback to any image with a URL
     for img in reversed(images):
         if img.get("#text"):
             return img["#text"]
@@ -74,39 +71,86 @@ def download_cover(url: str) -> Image.Image | None:
         return None
 
 
-def make_placeholder(album_name: str, artist_name: str) -> Image.Image:
-    img = Image.new("RGB", (CELL_SIZE, CELL_SIZE), color=(50, 50, 50))
-    draw = ImageDraw.Draw(img)
-
-    try:
-        font_title = ImageFont.truetype("DejaVuSans-Bold.ttf", 22)
-        font_artist = ImageFont.truetype("DejaVuSans.ttf", 18)
-    except Exception:
-        font_title = ImageFont.load_default()
-        font_artist = ImageFont.load_default()
-
-    title_lines = textwrap.wrap(album_name or "Unknown Album", width=18)[:4]
-    artist_lines = textwrap.wrap(artist_name or "Unknown Artist", width=20)[:2]
-
-    y = 30
-    for line in title_lines:
-        draw.text((15, y), line, fill=(255, 255, 255), font=font_title)
-        y += 30
-
-    y += 20
-    for line in artist_lines:
-        draw.text((15, y), line, fill=(200, 200, 200), font=font_artist)
-        y += 24
-
-    return img
-
-
 def crop_to_square(img: Image.Image) -> Image.Image:
     w, h = img.size
     side = min(w, h)
     left = (w - side) // 2
     top = (h - side) // 2
     return img.crop((left, top, left + side, top + side))
+
+
+def get_fonts():
+    try:
+        title_font = ImageFont.truetype("DejaVuSans-Bold.ttf", 20)
+        artist_font = ImageFont.truetype("DejaVuSans.ttf", 16)
+    except Exception:
+        title_font = ImageFont.load_default()
+        artist_font = ImageFont.load_default()
+    return title_font, artist_font
+
+
+def wrap_text(text: str, width: int) -> list[str]:
+    return textwrap.wrap(text or "", width=width)[:2]
+
+
+def add_lastcollage_style_overlay(img: Image.Image, album_name: str, artist_name: str) -> Image.Image:
+    img = img.copy().convert("RGBA")
+    overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+
+    title_font, artist_font = get_fonts()
+
+    gradient_height = int(img.height * 0.38)
+    start_y = img.height - gradient_height
+
+    for i in range(gradient_height):
+        alpha = int(180 * (i / gradient_height))
+        y = start_y + i
+        draw.rectangle([(0, y), (img.width, y + 1)], fill=(0, 0, 0, alpha))
+
+    title_lines = wrap_text(album_name, 18)
+    artist_lines = wrap_text(artist_name, 22)
+
+    padding_x = 12
+    current_y = img.height - 70
+
+    if len(title_lines) == 2:
+        current_y -= 16
+    if len(artist_lines) == 2:
+        current_y -= 10
+
+    for line in title_lines:
+        draw.text((padding_x, current_y), line, font=title_font, fill=(255, 255, 255, 235))
+        current_y += 22
+
+    current_y += 4
+
+    for line in artist_lines:
+        draw.text((padding_x, current_y), line, font=artist_font, fill=(220, 220, 220, 225))
+        current_y += 18
+
+    return Image.alpha_composite(img, overlay).convert("RGB")
+
+
+def make_placeholder(album_name: str, artist_name: str) -> Image.Image:
+    img = Image.new("RGB", (CELL_SIZE, CELL_SIZE), color=(45, 45, 45))
+    draw = ImageDraw.Draw(img)
+    title_font, artist_font = get_fonts()
+
+    title_lines = wrap_text(album_name or "Unknown Album", 16)
+    artist_lines = wrap_text(artist_name or "Unknown Artist", 20)
+
+    y = 40
+    for line in title_lines:
+        draw.text((16, y), line, fill=(255, 255, 255), font=title_font)
+        y += 26
+
+    y += 10
+    for line in artist_lines:
+        draw.text((16, y), line, fill=(210, 210, 210), font=artist_font)
+        y += 20
+
+    return img
 
 
 def prepare_cover(album: dict) -> Image.Image:
@@ -116,10 +160,12 @@ def prepare_cover(album: dict) -> Image.Image:
 
     cover = download_cover(image_url) if image_url else None
     if cover is None:
-        return make_placeholder(album_name, artist_name)
+        cover = make_placeholder(album_name, artist_name)
+    else:
+        cover = crop_to_square(cover)
+        cover = cover.resize((CELL_SIZE, CELL_SIZE), Image.Resampling.LANCZOS)
 
-    cover = crop_to_square(cover)
-    cover = cover.resize((CELL_SIZE, CELL_SIZE), Image.Resampling.LANCZOS)
+    cover = add_lastcollage_style_overlay(cover, album_name, artist_name)
     return cover
 
 
@@ -138,11 +184,11 @@ def build_collage(albums: list[dict], output_path: Path) -> None:
     collage.save(output_path, format="PNG")
 
 
-def send_to_discord(webhook_url: str, image_path: Path, username: str) -> None:
+def send_to_discord(webhook_url: str, image_path: Path) -> None:
     with open(image_path, "rb") as f:
         response = requests.post(
             webhook_url,
-            data={"content": f"{username}'s weekly 5x5 album collage"},
+            data={"content": "Zhivko's weekly top 25 albums"},
             files={"file": ("weekly-collage.png", f, "image/png")},
             timeout=60,
         )
@@ -160,7 +206,7 @@ def main() -> None:
 
     albums = lastfm_get_top_albums(username=username, api_key=api_key, limit=25)
     build_collage(albums, output_path)
-    send_to_discord(webhook_url=webhook_url, image_path=output_path, username=username)
+    send_to_discord(webhook_url=webhook_url, image_path=output_path)
 
 
 if __name__ == "__main__":
