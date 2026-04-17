@@ -22,8 +22,23 @@ def generate_collage(username, output_path):
         browser = p.chromium.launch(headless=True)
         page = browser.new_page(viewport={"width": 1600, "height": 1800})
 
+
         page.goto(LASTCOLLAGE_URL, wait_until="networkidle", timeout=60000)
-        page.wait_for_timeout(5000)
+        page.wait_for_timeout(3000)
+
+        # Close popup (IMPORTANT)
+try:
+    page.get_by_role("button", name="Done").click(timeout=5000)
+    page.wait_for_timeout(1000)
+except:
+    pass
+
+# Click "Get started"
+try:
+    page.get_by_role("button", name="Get started").click(timeout=5000)
+    page.wait_for_timeout(2000)
+except:
+    pass
 
         # Dismiss common cookie / consent popups
         for text in ["Accept", "Accept all", "I agree", "Got it", "OK"]:
