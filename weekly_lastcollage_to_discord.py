@@ -63,77 +63,70 @@ def generate_collage(username, output_path):
             page.screenshot(path="debug-lastcollage-page.png", full_page=True)
             raise Exception("Could not find a visible Last.fm username input field. Saved debug-lastcollage-page.png")
 
-        username_locator.click()
-        username_locator.fill(username)
-        page.wait_for_timeout(1000)
+username_locator.click()
+username_locator.fill(username)
+page.wait_for_timeout(1000)
 
-        # Move past the username screen
-advanced = False
-
-for text in ["Next", "Continue", "Go"]:
+# Step 1 -> next
+next_clicked = False
+for text in ["Next", "Continue"]:
     try:
-        page.get_by_role("button", name=text).click(timeout=3000)
-        page.wait_for_timeout(3000)
-        advanced = True
+        page.get_by_role("button", name=text).click(timeout=5000)
+        next_clicked = True
+        page.wait_for_timeout(2500)
         break
     except:
         pass
 
-if not advanced:
+if not next_clicked:
+    page.screenshot(path="debug-lastcollage-page.png", full_page=True)
+    raise Exception("Could not find Next button after username entry. Saved debug-lastcollage-page.png")
+
+# Step 2+ try common option selections
+for text in ["Last 7 Days", "7 days", "Weekly", "Last week"]:
     try:
-        page.keyboard.press("Enter")
-        page.wait_for_timeout(3000)
-        advanced = True
+        page.get_by_text(text, exact=False).click(timeout=3000)
+        page.wait_for_timeout(800)
+        break
     except:
         pass
 
-if not advanced:
-    page.screenshot(path="debug-lastcollage-page.png", full_page=True)
-    raise Exception("Could not move past username screen. Saved debug-lastcollage-page.png")
+for text in ["5x5", "5 x 5"]:
+    try:
+        page.get_by_text(text, exact=False).click(timeout=3000)
+        page.wait_for_timeout(800)
+        break
+    except:
+        pass
 
-        for text in ["Last 7 Days", "7 days", "Last week", "Weekly"]:
-            try:
-                page.get_by_text(text, exact=False).click(timeout=3000)
-                page.wait_for_timeout(500)
-                break
-            except:
-                pass
+for text in ["Albums", "Album"]:
+    try:
+        page.get_by_text(text, exact=False).click(timeout=3000)
+        page.wait_for_timeout(800)
+        break
+    except:
+        pass
 
-        for text in ["5x5", "5 x 5"]:
-            try:
-                page.get_by_text(text, exact=False).click(timeout=3000)
-                page.wait_for_timeout(500)
-                break
-            except:
-                pass
+# Try the main action button on the next screen
+action_clicked = False
+for text in ["Generate", "Create", "Make collage", "Next", "Continue", "Done"]:
+    try:
+        page.get_by_role("button", name=text).click(timeout=4000)
+        action_clicked = True
+        page.wait_for_timeout(4000)
+        break
+    except:
+        try:
+            page.get_by_text(text, exact=False).click(timeout=4000)
+            action_clicked = True
+            page.wait_for_timeout(4000)
+            break
+        except:
+            pass
 
-        for text in ["Albums", "Album"]:
-            try:
-                page.get_by_text(text, exact=False).click(timeout=3000)
-                page.wait_for_timeout(500)
-                break
-            except:
-                pass
+# If no action button was needed, that's okay; proceed to screenshot for debugging/result
+page.wait_for_timeout(4000)
 
-        generated = False
-        for text in ["Generate", "Create", "Make collage"]:
-            try:
-                page.get_by_role("button", name=text).click(timeout=3000)
-                generated = True
-                break
-            except:
-                try:
-                    page.get_by_text(text, exact=False).click(timeout=3000)
-                    generated = True
-                    break
-                except:
-                    pass
-
-        if not generated:
-            page.screenshot(path="debug-lastcollage-page.png", full_page=True)
-            raise Exception("Could not find Generate button. Saved debug-lastcollage-page.png")
-
-        page.wait_for_timeout(8000)
         page.screenshot(path=str(output_path), full_page=True)
         browser.close()
 
