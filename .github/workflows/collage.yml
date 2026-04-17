@@ -31,6 +31,5 @@ jobs:
         with:
           name: debug-lastcollage
           path: |
-            debug-lastcollage-page.png
-            collage.png
+            *.png
           if-no-files-found: ignore
