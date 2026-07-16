@@ -4,6 +4,15 @@ on:
   schedule:
     - cron: "0 18 * * 0"
   workflow_dispatch:
+    inputs:
+      preview_only:
+        description: "Generate the collage without sending it to Discord"
+        required: true
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
 
 jobs:
   run:
@@ -23,3 +32,11 @@ jobs:
           LASTFM_USERNAME: ${{ secrets.LASTFM_USERNAME }}
           LASTFM_API_KEY: ${{ secrets.LASTFM_API_KEY }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          PREVIEW_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.preview_only || 'false' }}
+
+      - name: Upload collage preview
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.preview_only == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: weekly-collage-preview
+          path: collage.png
