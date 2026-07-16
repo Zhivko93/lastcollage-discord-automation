@@ -2,6 +2,7 @@ import io
 import os
 import textwrap
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import requests
@@ -19,6 +20,12 @@ CELL_SIZE = 300
 PADDING = 0
 OUTPUT_WIDTH = GRID_SIZE * CELL_SIZE + (GRID_SIZE - 1) * PADDING
 OUTPUT_HEIGHT = GRID_SIZE * CELL_SIZE + (GRID_SIZE - 1) * PADDING
+COLLAGE_TRIGGER_WEEKDAY = 6
+COLLAGE_TRIGGER_HOUR_UTC = 18
+COLLAGE_WINDOW_DAYS = 7
+LASTFM_PAGE_LIMIT = 200
+COMPLETED_ALBUM_OUTLINE_COLOR = (255, 196, 45)
+COMPLETED_ALBUM_OUTLINE_WIDTH = 10
 
 
 def get_env(name: str) -> str:
@@ -28,15 +35,17 @@ def get_env(name: str) -> str:
     return value
 
 
-def lastfm_get_top_albums(username: str, api_key: str, limit: int = 25) -> list[dict]:
-    params = {
-        "method": "user.gettopalbums",
-        "user": username,
-        "period": "7day",
-        "limit": limit,
-        "api_key": api_key,
-        "format": "json",
-    }
+def normalize_name(value: str) -> str:
+    return " ".join((value or "").casefold().split())
+
+
+def get_lastfm_text(value: object) -> str:
+    if isinstance(value, dict):
+        return str(value.get("#text") or value.get("name") or "").strip()
+    return str(value or "").strip()
+
+
+def lastfm_request(params: dict) -> dict:
     response = requests.get(LASTFM_API_URL, params=params, timeout=30)
     response.raise_for_status()
     data = response.json()
@@ -44,11 +53,191 @@ def lastfm_get_top_albums(username: str, api_key: str, limit: int = 25) -> list[
     if "error" in data:
         raise RuntimeError(f"Last.fm API error: {data.get('message', 'Unknown error')}")
 
-    albums = data.get("topalbums", {}).get("album", [])
-    if not albums:
-        raise RuntimeError("No albums returned from Last.fm for the last 7 days.")
+    return data
 
-    return albums
+
+def get_collage_window(now: datetime | None = None) -> tuple[datetime, datetime, int, int]:
+    now = now or datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    else:
+        now = now.astimezone(timezone.utc)
+
+    days_since_trigger_day = (now.weekday() - COLLAGE_TRIGGER_WEEKDAY) % 7
+    window_end = now.replace(
+        hour=COLLAGE_TRIGGER_HOUR_UTC,
+        minute=0,
+        second=0,
+        microsecond=0,
+    ) - timedelta(days=days_since_trigger_day)
+
+    if window_end > now:
+        window_end -= timedelta(days=COLLAGE_WINDOW_DAYS)
+
+    window_start = window_end - timedelta(days=COLLAGE_WINDOW_DAYS)
+
+    # Last.fm's range is strictly "after from" and "before to".
+    # Querying from one second before the boundary includes the exact trigger second
+    # in the following week's collage without overlapping the previous one.
+    from_ts = int(window_start.timestamp()) - 1
+    to_ts = int(window_end.timestamp())
+    return window_start, window_end, from_ts, to_ts
+
+
+def lastfm_get_recent_tracks(
+    username: str,
+    api_key: str,
+    from_ts: int,
+    to_ts: int,
+) -> list[dict]:
+    tracks = []
+    page = 1
+
+    while True:
+        data = lastfm_request(
+            {
+                "method": "user.getrecenttracks",
+                "user": username,
+                "from": from_ts,
+                "to": to_ts,
+                "limit": LASTFM_PAGE_LIMIT,
+                "page": page,
+                "api_key": api_key,
+                "format": "json",
+            }
+        )
+
+        recent_tracks = data.get("recenttracks", {})
+        batch = recent_tracks.get("track", [])
+        if isinstance(batch, dict):
+            batch = [batch]
+
+        dated_tracks = [
+            track
+            for track in batch
+            if isinstance(track, dict) and "date" in track and "@attr" not in track
+        ]
+        tracks.extend(dated_tracks)
+
+        attrs = recent_tracks.get("@attr", {})
+        total_pages = int(attrs.get("totalPages") or page)
+        if page >= total_pages or not batch:
+            break
+
+        page += 1
+
+    if not tracks:
+        raise RuntimeError("No scrobbles returned from Last.fm for this collage window.")
+
+    return tracks
+
+
+def album_key(artist_name: str, album_name: str) -> tuple[str, str]:
+    return normalize_name(artist_name), normalize_name(album_name)
+
+
+def build_album_records(tracks: list[dict], limit: int = 25) -> list[dict]:
+    albums: dict[tuple[str, str], dict] = {}
+
+    for track in tracks:
+        album_name = get_lastfm_text(track.get("album"))
+        artist_name = get_lastfm_text(track.get("artist"))
+        track_name = get_lastfm_text(track.get("name"))
+
+        if not album_name or not artist_name or not track_name:
+            continue
+
+        key = album_key(artist_name, album_name)
+        uts = int(track.get("date", {}).get("uts") or 0)
+
+        if key not in albums:
+            albums[key] = {
+                "name": album_name,
+                "artist": {"name": artist_name},
+                "image": track.get("image", []),
+                "mbid": get_lastfm_text(track.get("album", {}).get("mbid")),
+                "playcount": 0,
+                "latest_uts": uts,
+                "listened_tracks": set(),
+                "complete": False,
+            }
+
+        album = albums[key]
+        album["playcount"] += 1
+        album["latest_uts"] = max(album["latest_uts"], uts)
+        album["listened_tracks"].add(normalize_name(track_name))
+
+        if not album.get("image") and track.get("image"):
+            album["image"] = track.get("image", [])
+
+    ranked_albums = sorted(
+        albums.values(),
+        key=lambda album: (
+            -album["playcount"],
+            -album["latest_uts"],
+            normalize_name(album["artist"]["name"]),
+            normalize_name(album["name"]),
+        ),
+    )
+
+    if not ranked_albums:
+        raise RuntimeError("No album scrobbles returned from Last.fm for this collage window.")
+
+    return ranked_albums[:limit]
+
+
+def lastfm_get_album_track_names(
+    album_name: str,
+    artist_name: str,
+    api_key: str,
+    mbid: str = "",
+) -> set[str]:
+    params = {
+        "method": "album.getinfo",
+        "api_key": api_key,
+        "format": "json",
+        "autocorrect": 1,
+    }
+
+    if mbid:
+        params["mbid"] = mbid
+    else:
+        params["artist"] = artist_name
+        params["album"] = album_name
+
+    try:
+        data = lastfm_request(params)
+    except Exception as exc:
+        print(f"Could not fetch tracklist for {artist_name} - {album_name}: {exc}")
+        return set()
+
+    track_data = data.get("album", {}).get("tracks", {}).get("track", [])
+    if isinstance(track_data, dict):
+        track_data = [track_data]
+
+    return {
+        normalize_name(get_lastfm_text(track.get("name")))
+        for track in track_data
+        if isinstance(track, dict) and get_lastfm_text(track.get("name"))
+    }
+
+
+def mark_completed_albums(albums: list[dict], api_key: str) -> None:
+    for album in albums:
+        album_name = album.get("name", "")
+        artist_name = album.get("artist", {}).get("name", "")
+        tracklist = lastfm_get_album_track_names(
+            album_name=album_name,
+            artist_name=artist_name,
+            api_key=api_key,
+            mbid=album.get("mbid", ""),
+        )
+
+        listened_tracks = album.get("listened_tracks", set())
+        album["complete"] = bool(tracklist) and tracklist.issubset(listened_tracks)
+
+        # Keep these calls gentle for Last.fm when all 25 albums need tracklists.
+        time.sleep(0.2)
 
 
 def extract_image_urls(album: dict) -> list[str]:
@@ -159,6 +348,21 @@ def add_lastcollage_style_overlay(img: Image.Image, album_name: str, artist_name
         current_y += 18
 
     return Image.alpha_composite(img, overlay).convert("RGB")
+
+
+def add_completed_album_outline(img: Image.Image) -> Image.Image:
+    img = img.copy()
+    draw = ImageDraw.Draw(img)
+    half_width = COMPLETED_ALBUM_OUTLINE_WIDTH // 2
+    draw.rectangle(
+        [
+            (half_width, half_width),
+            (img.width - half_width - 1, img.height - half_width - 1),
+        ],
+        outline=COMPLETED_ALBUM_OUTLINE_COLOR,
+        width=COMPLETED_ALBUM_OUTLINE_WIDTH,
+    )
+    return img
 
 
 def make_placeholder(album_name: str, artist_name: str) -> Image.Image:
@@ -286,6 +490,8 @@ def prepare_cover(album: dict) -> Image.Image:
         cover = cover.resize((CELL_SIZE, CELL_SIZE), Image.Resampling.LANCZOS)
 
     cover = add_lastcollage_style_overlay(cover, album_name, artist_name)
+    if album.get("complete"):
+        cover = add_completed_album_outline(cover)
     return cover
 
 
@@ -304,11 +510,15 @@ def build_collage(albums: list[dict], output_path: Path) -> None:
     collage.save(output_path, format="PNG")
 
 
-def send_to_discord(webhook_url: str, image_path: Path) -> None:
+def send_to_discord(webhook_url: str, image_path: Path, window_start: datetime, window_end: datetime) -> None:
+    content = (
+        "Zhivko's weekly top 25 albums\n"
+        f"Window: {window_start:%Y-%m-%d %H:%M} UTC to {window_end:%Y-%m-%d %H:%M} UTC"
+    )
     with open(image_path, "rb") as f:
         response = requests.post(
             webhook_url,
-            data={"content": "Zhivko's weekly top 25 albums"},
+            data={"content": content},
             files={"file": ("weekly-collage.png", f, "image/png")},
             timeout=60,
         )
@@ -323,10 +533,23 @@ def main() -> None:
     webhook_url = get_env("DISCORD_WEBHOOK_URL")
 
     output_path = Path("collage.png")
+    window_start, window_end, from_ts, to_ts = get_collage_window()
 
-    albums = lastfm_get_top_albums(username=username, api_key=api_key, limit=25)
+    tracks = lastfm_get_recent_tracks(
+        username=username,
+        api_key=api_key,
+        from_ts=from_ts,
+        to_ts=to_ts,
+    )
+    albums = build_album_records(tracks, limit=GRID_SIZE * GRID_SIZE)
+    mark_completed_albums(albums, api_key=api_key)
     build_collage(albums, output_path)
-    send_to_discord(webhook_url=webhook_url, image_path=output_path)
+    send_to_discord(
+        webhook_url=webhook_url,
+        image_path=output_path,
+        window_start=window_start,
+        window_end=window_end,
+    )
 
 
 if __name__ == "__main__":
