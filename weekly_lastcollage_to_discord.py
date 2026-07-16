@@ -24,8 +24,6 @@ COLLAGE_TRIGGER_WEEKDAY = 6
 COLLAGE_TRIGGER_HOUR_UTC = 18
 COLLAGE_WINDOW_DAYS = 7
 LASTFM_PAGE_LIMIT = 200
-COMPLETED_ALBUM_OUTLINE_COLOR = (255, 196, 45)
-COMPLETED_ALBUM_OUTLINE_WIDTH = 10
 
 
 def env_flag(name: str, default: bool = False) -> bool:
@@ -162,17 +160,13 @@ def build_album_records(tracks: list[dict], limit: int = 25) -> list[dict]:
                 "name": album_name,
                 "artist": {"name": artist_name},
                 "image": track.get("image", []),
-                "mbid": get_lastfm_text(track.get("album", {}).get("mbid")),
                 "playcount": 0,
                 "latest_uts": uts,
-                "listened_tracks": set(),
-                "complete": False,
             }
 
         album = albums[key]
         album["playcount"] += 1
         album["latest_uts"] = max(album["latest_uts"], uts)
-        album["listened_tracks"].add(normalize_name(track_name))
 
         if not album.get("image") and track.get("image"):
             album["image"] = track.get("image", [])
@@ -191,60 +185,6 @@ def build_album_records(tracks: list[dict], limit: int = 25) -> list[dict]:
         raise RuntimeError("No album scrobbles returned from Last.fm for this collage window.")
 
     return ranked_albums[:limit]
-
-
-def lastfm_get_album_track_names(
-    album_name: str,
-    artist_name: str,
-    api_key: str,
-    mbid: str = "",
-) -> set[str]:
-    params = {
-        "method": "album.getinfo",
-        "api_key": api_key,
-        "format": "json",
-        "autocorrect": 1,
-    }
-
-    if mbid:
-        params["mbid"] = mbid
-    else:
-        params["artist"] = artist_name
-        params["album"] = album_name
-
-    try:
-        data = lastfm_request(params)
-    except Exception as exc:
-        print(f"Could not fetch tracklist for {artist_name} - {album_name}: {exc}")
-        return set()
-
-    track_data = data.get("album", {}).get("tracks", {}).get("track", [])
-    if isinstance(track_data, dict):
-        track_data = [track_data]
-
-    return {
-        normalize_name(get_lastfm_text(track.get("name")))
-        for track in track_data
-        if isinstance(track, dict) and get_lastfm_text(track.get("name"))
-    }
-
-
-def mark_completed_albums(albums: list[dict], api_key: str) -> None:
-    for album in albums:
-        album_name = album.get("name", "")
-        artist_name = album.get("artist", {}).get("name", "")
-        tracklist = lastfm_get_album_track_names(
-            album_name=album_name,
-            artist_name=artist_name,
-            api_key=api_key,
-            mbid=album.get("mbid", ""),
-        )
-
-        listened_tracks = album.get("listened_tracks", set())
-        album["complete"] = bool(tracklist) and tracklist.issubset(listened_tracks)
-
-        # Keep these calls gentle for Last.fm when all 25 albums need tracklists.
-        time.sleep(0.2)
 
 
 def extract_image_urls(album: dict) -> list[str]:
@@ -355,21 +295,6 @@ def add_lastcollage_style_overlay(img: Image.Image, album_name: str, artist_name
         current_y += 18
 
     return Image.alpha_composite(img, overlay).convert("RGB")
-
-
-def add_completed_album_outline(img: Image.Image) -> Image.Image:
-    img = img.copy()
-    draw = ImageDraw.Draw(img)
-    half_width = COMPLETED_ALBUM_OUTLINE_WIDTH // 2
-    draw.rectangle(
-        [
-            (half_width, half_width),
-            (img.width - half_width - 1, img.height - half_width - 1),
-        ],
-        outline=COMPLETED_ALBUM_OUTLINE_COLOR,
-        width=COMPLETED_ALBUM_OUTLINE_WIDTH,
-    )
-    return img
 
 
 def make_placeholder(album_name: str, artist_name: str) -> Image.Image:
@@ -496,10 +421,7 @@ def prepare_cover(album: dict) -> Image.Image:
         cover = crop_to_square(cover)
         cover = cover.resize((CELL_SIZE, CELL_SIZE), Image.Resampling.LANCZOS)
 
-    cover = add_lastcollage_style_overlay(cover, album_name, artist_name)
-    if album.get("complete"):
-        cover = add_completed_album_outline(cover)
-    return cover
+    return add_lastcollage_style_overlay(cover, album_name, artist_name)
 
 
 def build_collage(albums: list[dict], output_path: Path) -> None:
@@ -550,7 +472,6 @@ def main() -> None:
         to_ts=to_ts,
     )
     albums = build_album_records(tracks, limit=GRID_SIZE * GRID_SIZE)
-    mark_completed_albums(albums, api_key=api_key)
     build_collage(albums, output_path)
 
     if preview_only:
