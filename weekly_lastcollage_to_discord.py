@@ -28,6 +28,13 @@ COMPLETED_ALBUM_OUTLINE_COLOR = (255, 196, 45)
 COMPLETED_ALBUM_OUTLINE_WIDTH = 10
 
 
+def env_flag(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().casefold() in {"1", "true", "yes", "on"}
+
+
 def get_env(name: str) -> str:
     value = os.environ.get(name, "").strip()
     if not value:
@@ -530,7 +537,8 @@ def send_to_discord(webhook_url: str, image_path: Path, window_start: datetime, 
 def main() -> None:
     username = get_env("LASTFM_USERNAME").lower()
     api_key = get_env("LASTFM_API_KEY")
-    webhook_url = get_env("DISCORD_WEBHOOK_URL")
+    preview_only = env_flag("PREVIEW_ONLY")
+    webhook_url = "" if preview_only else get_env("DISCORD_WEBHOOK_URL")
 
     output_path = Path("collage.png")
     window_start, window_end, from_ts, to_ts = get_collage_window()
@@ -544,12 +552,17 @@ def main() -> None:
     albums = build_album_records(tracks, limit=GRID_SIZE * GRID_SIZE)
     mark_completed_albums(albums, api_key=api_key)
     build_collage(albums, output_path)
-    send_to_discord(
-        webhook_url=webhook_url,
-        image_path=output_path,
-        window_start=window_start,
-        window_end=window_end,
-    )
+
+    if preview_only:
+        print(f"Preview generated at {output_path}")
+        print(f"Window: {window_start:%Y-%m-%d %H:%M} UTC to {window_end:%Y-%m-%d %H:%M} UTC")
+    else:
+        send_to_discord(
+            webhook_url=webhook_url,
+            image_path=output_path,
+            window_start=window_start,
+            window_end=window_end,
+        )
 
 
 if __name__ == "__main__":
