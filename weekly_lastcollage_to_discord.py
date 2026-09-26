@@ -244,15 +244,17 @@ def wrap_text(text: str, width: int) -> list[str]:
     return textwrap.wrap(text or "", width=width)[:2]
 
 
-def add_lastcollage_style_overlay(img: Image.Image, album_name: str, artist_name: str) -> Image.Image:
+def add_lastcollage_style_overlay(img: Image.Image, album_name: str, artist_name: str, playcount: int | None = None) -> Image.Image:
     img = img.copy().convert("RGBA")
     overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
 
     try:
         font = ImageFont.truetype("DejaVuSans.ttf", 16)
+        count_font = ImageFont.truetype("DejaVuSans.ttf", 12)
     except Exception:
-        font = ImageFont.load_default()
+        font = ImageFont.load_default(size=16)
+        count_font = ImageFont.load_default(size=12)
 
     text = f"{artist_name} - {album_name}"
     lines = textwrap.wrap(text, width=28)[:2]
@@ -260,39 +262,30 @@ def add_lastcollage_style_overlay(img: Image.Image, album_name: str, artist_name
     padding_x = 8
     padding_y = 6
 
-    text_width = 0
-    text_height = 0
+    count_text = None
+    if playcount is not None:
+        count_text = f"{playcount:,} {'play' if playcount == 1 else 'plays'}"
 
-    for line in lines:
-        bbox = draw.textbbox((0, 0), line, font=font)
-        w = bbox[2] - bbox[0]
-        h = bbox[3] - bbox[1]
-        text_width = max(text_width, w)
-        text_height += h
-
-    text_height += (len(lines) - 1) * 2
-
-    box_x = 0
-    box_y = img.height - text_height - (padding_y * 2)
-
+    # Measure each line so descenders and the smaller count fit inside the panel.
+    rows = [(line, font, (255, 255, 255, 230)) for line in lines]
+    if count_text is not None:
+        rows.append((count_text, count_font, (210, 210, 210, 230)))
+    measured = [(text, face, color, draw.textbbox((0, 0), text, font=face))
+                for text, face, color in rows]
+    gap = 4
+    text_width = max((box[2] - box[0] for _, _, _, box in measured), default=0)
+    text_height = sum(box[3] - box[1] for _, _, _, box in measured)
+    text_height += max(0, len(measured) - 1) * gap
+    box_y = img.height - text_height - padding_y * 2
     draw.rectangle(
-        [
-            (box_x, box_y),
-            (box_x + text_width + padding_x * 2, img.height)
-        ],
-        fill=(0, 0, 0, 140)
+        [(0, box_y), (min(img.width, text_width + padding_x * 2), img.height)],
+        fill=(0, 0, 0, 140),
     )
-
     current_y = box_y + padding_y
-
-    for line in lines:
-        draw.text(
-            (padding_x, current_y),
-            line,
-            font=font,
-            fill=(255, 255, 255, 230)
-        )
-        current_y += 18
+    for line, face, color, bbox in measured:
+        draw.text((padding_x - bbox[0], current_y - bbox[1]),
+                  line, font=face, fill=color)
+        current_y += bbox[3] - bbox[1] + gap
 
     return Image.alpha_composite(img, overlay).convert("RGB")
 
@@ -421,7 +414,7 @@ def prepare_cover(album: dict) -> Image.Image:
         cover = crop_to_square(cover)
         cover = cover.resize((CELL_SIZE, CELL_SIZE), Image.Resampling.LANCZOS)
 
-    return add_lastcollage_style_overlay(cover, album_name, artist_name)
+    return add_lastcollage_style_overlay(cover, album_name, artist_name, album.get("playcount"))
 
 
 def build_collage(albums: list[dict], output_path: Path) -> None:
