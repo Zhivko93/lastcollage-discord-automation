@@ -449,14 +449,77 @@ def send_to_discord(webhook_url: str, image_path: Path, window_start: datetime, 
         raise RuntimeError(f"Discord webhook error: {response.status_code} {response.text}")
 
 
+def wait_for_scheduled_window() -> None:
+    """Start the runner early, but never send an incomplete listening week."""
+    if os.environ.get("GITHUB_EVENT_NAME") != "schedule":
+        return
+    now = datetime.now(timezone.utc)
+    if now.weekday() == COLLAGE_TRIGGER_WEEKDAY:
+        cutoff = now.replace(hour=COLLAGE_TRIGGER_HOUR_UTC, minute=0, second=0, microsecond=0)
+        seconds = (cutoff - now).total_seconds()
+        if seconds > 0:
+            print(f"Waiting {int(seconds)} seconds for the weekly cutoff.", flush=True)
+            time.sleep(seconds)
+
+
+def delivery_ref(window_end: datetime) -> str:
+    return f"tags/collage-delivery-{window_end:%Y-%m-%d-%H%M}"
+
+
+def github_delivery_request(method: str, path: str, **kwargs) -> requests.Response:
+    repository = get_env("GITHUB_REPOSITORY")
+    token = get_env("GITHUB_TOKEN")
+    response = requests.request(
+        method,
+        f"https://api.github.com/repos/{repository}/{path}",
+        headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"},
+        timeout=30,
+        **kwargs,
+    )
+    return response
+
+
+def delivery_already_claimed(window_end: datetime) -> bool:
+    response = github_delivery_request("GET", f"git/ref/{delivery_ref(window_end)}")
+    if response.status_code == 404:
+        return False
+    response.raise_for_status()
+    return True
+
+
+def claim_delivery(window_end: datetime) -> bool:
+    """An atomic, persistent claim prevents concurrent/manual/scheduled duplicates.
+
+    Keep the claim after an ambiguous Discord error: automatic retries could
+    duplicate a message that Discord accepted before the response was lost.
+    """
+    response = github_delivery_request(
+        "POST", "git/refs",
+        json={"ref": f"refs/{delivery_ref(window_end)}", "sha": get_env("GITHUB_SHA")},
+    )
+    if response.status_code == 201:
+        return True
+    if response.status_code == 422 and delivery_already_claimed(window_end):
+        return False
+    response.raise_for_status()
+    raise RuntimeError("Unexpected response while claiming weekly delivery.")
+
+
 def main() -> None:
     username = get_env("LASTFM_USERNAME").lower()
     api_key = get_env("LASTFM_API_KEY")
     preview_only = env_flag("PREVIEW_ONLY")
     webhook_url = "" if preview_only else get_env("DISCORD_WEBHOOK_URL")
 
+    if not preview_only:
+        wait_for_scheduled_window()
+
     output_path = Path("collage.png")
     window_start, window_end, from_ts, to_ts = get_collage_window()
+
+    if not preview_only and delivery_already_claimed(window_end):
+        print(f"Skipping already claimed weekly delivery: {window_end.isoformat()}")
+        return
 
     tracks = lastfm_get_recent_tracks(
         username=username,
@@ -471,12 +534,16 @@ def main() -> None:
         print(f"Preview generated at {output_path}")
         print(f"Window: {window_start:%Y-%m-%d %H:%M} UTC to {window_end:%Y-%m-%d %H:%M} UTC")
     else:
+        if not claim_delivery(window_end):
+            print("Another run already claimed this weekly delivery; skipping.")
+            return
         send_to_discord(
             webhook_url=webhook_url,
             image_path=output_path,
             window_start=window_start,
             window_end=window_end,
         )
+        print(f"Discord delivery confirmed for {window_end.isoformat()}")
 
 
 if __name__ == "__main__":
