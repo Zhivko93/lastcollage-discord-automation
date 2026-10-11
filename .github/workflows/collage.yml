@@ -2,12 +2,16 @@ name: Weekly Lastcollage
 
 on:
   schedule:
-    - cron: "0 18 * * 0"
+    - cron: "7 15 * * 0"
   push:
     branches:
       - main
+      - fix/weekly-delivery-deduplication
     paths:
       - ".github/preview-trigger.txt"
+      - ".github/send-trigger.txt"
+      - ".github/workflows/collage.yml"
+      - "test_weekly_delivery.py"
   workflow_dispatch:
     inputs:
       preview_only:
@@ -19,9 +23,18 @@ on:
           - "true"
           - "false"
 
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: weekly-lastcollage-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   run:
     runs-on: ubuntu-latest
+    timeout-minutes: 240
 
     steps:
       - uses: actions/checkout@v4
@@ -32,15 +45,41 @@ jobs:
 
       - run: pip install requests pillow
 
-      - run: python weekly_lastcollage_to_discord.py
+      - name: Test weekly delivery safeguards
+        run: python -m unittest -v test_weekly_delivery.py
+
+      - name: Cancel any outstanding run using the superseded workflow
+        if: github.ref == 'refs/heads/main'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
+              owner: context.repo.owner, repo: context.repo.repo,
+              workflow_id: 'collage.yml', per_page: 100
+            });
+            for (const run of runs) {
+              if (run.id !== context.runId && run.event === 'schedule' &&
+                  run.head_sha !== context.sha &&
+                  ['queued', 'in_progress', 'waiting', 'pending', 'requested'].includes(run.status)) {
+                await github.rest.actions.cancelWorkflowRun({
+                  owner: context.repo.owner, repo: context.repo.repo, run_id: run.id
+                });
+                throw new Error('Cancelled a superseded run; inspect its logs before retrying delivery.');
+              }
+            }
+
+      - name: Generate or deliver weekly collage
+        if: github.ref == 'refs/heads/main'
+        run: python weekly_lastcollage_to_discord.py
         env:
+          GITHUB_TOKEN: ${{ github.token }}
           LASTFM_USERNAME: ${{ secrets.LASTFM_USERNAME }}
           LASTFM_API_KEY: ${{ secrets.LASTFM_API_KEY }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          PREVIEW_ONLY: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.preview_only == 'true') }}
+          PREVIEW_ONLY: ${{ (github.event_name == 'push' && github.event.head_commit.message != 'Send weekly collage now (deduplicated)') || (github.event_name == 'workflow_dispatch' && inputs.preview_only == 'true') }}
 
       - name: Upload collage preview
-        if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.preview_only == 'true') }}
+        if: ${{ github.ref == 'refs/heads/main' && ((github.event_name == 'push' && github.event.head_commit.message != 'Send weekly collage now (deduplicated)') || (github.event_name == 'workflow_dispatch' && inputs.preview_only == 'true')) }}
         uses: actions/upload-artifact@v4
         with:
           name: weekly-collage-preview
